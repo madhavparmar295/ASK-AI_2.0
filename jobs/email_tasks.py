@@ -8,7 +8,10 @@ from services.sender_filter import (
     fetch_from_header,
     is_allowed_sender,
 )
-
+from services.history_state import (
+    get_last_history_id,
+    set_last_history_id,
+)
 
 @celery_app.task(
     bind=True,
@@ -126,7 +129,95 @@ def process_backfill_batch_task(
             )
             continue
 
+@celery_app.task(
+    bind=True,
+    max_retries=5,
+    default_retry_delay=30,
+)
+def process_history_task(
+    self,
+    user_id: str,
+    history_id: str,
+):
+    """
+    Process Gmail history changes after a Pub/Sub notification.
 
+    Pub/Sub tells us that Gmail changed. Gmail history tells us
+    which messages actually changed.
+    """
+
+    try:
+        acquire_token(bucket="gmail_api")
+
+        creds = get_valid_credentials(user_id)
+
+        gmail = build(
+            "gmail",
+            "v1",
+            credentials=creds,
+        )
+
+        start_history_id = get_last_history_id(user_id)
+
+        if not start_history_id:
+            set_last_history_id(
+                user_id,
+                history_id,
+            )
+            return
+
+        page_token = None
+
+        while True:
+            acquire_token(bucket="gmail_api")
+
+            response = (
+                gmail.users()
+                .history()
+                .list(
+                    userId="me",
+                    startHistoryId=start_history_id,
+                    historyTypes=["messageAdded"],
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+
+            for history_record in response.get(
+                "history",
+                [],
+            ):
+                for message_added in history_record.get(
+                    "messagesAdded",
+                    [],
+                ):
+                    message = message_added.get(
+                        "message",
+                        {},
+                    )
+
+                    message_id = message.get("id")
+
+                    if message_id:
+                        process_new_email_task.delay(
+                            user_id=user_id,
+                            message_id=message_id,
+                        )
+
+            page_token = response.get(
+                "nextPageToken"
+            )
+
+            if not page_token:
+                break
+
+        set_last_history_id(
+            user_id,
+            history_id,
+        )
+
+    except Exception as exc:
+        raise self.retry(exc=exc)
 def _index_email(
     message: dict,
     gmail=None,

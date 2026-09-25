@@ -1,36 +1,62 @@
 """
-Verifies that an incoming Pub/Sub push notification genuinely originated
-from Google and was not tampered with in transit, before any downstream
-processing (fetch, OCR, chunking, LLM calls) is allowed to run.
+Security helpers for Google Pub/Sub push webhooks.
 
-This is the cheapest possible check in the whole pipeline, so it sits
-first in routers/gmail_webhook.py -- reject fast, before spending any
-real work on an untrusted request.
+Pub/Sub push requests carry an OIDC bearer token in the Authorization
+header. We verify that token before processing the notification.
 """
 
-import hashlib
-import hmac
 import os
 
-WEBHOOK_SECRET = os.getenv("GMAIL_WEBHOOK_SECRET")
+from fastapi import HTTPException, Request
+from google.auth.transport import requests
+from google.oauth2 import id_token
 
 
-def verify_webhook_signature(payload: bytes, received_signature: str) -> bool:
+def verify_pubsub_oidc_token(request: Request) -> None:
     """
-    Recompute the HMAC-SHA256 signature over the raw payload using the
-    shared secret, and compare it against what Google sent. A mismatch
-    means either the payload was altered, or the sender never had the
-    secret in the first place (i.e. it isn't really Google).
+    Verify the Google-issued OIDC token attached to a Pub/Sub push.
+
+    The expected audience is configured through
+    GMAIL_PUBSUB_AUDIENCE.
     """
-    if not WEBHOOK_SECRET:
-        raise RuntimeError("GMAIL_WEBHOOK_SECRET is not configured")
 
-    expected_signature = hmac.new(
-        key=WEBHOOK_SECRET.encode(),
-        msg=payload,
-        digestmod=hashlib.sha256,
-    ).hexdigest()
+    authorization = request.headers.get("authorization", "")
 
-    # Constant-time comparison: prevents an attacker from using response-time
-    # differences to guess the correct signature one character at a time.
-    return hmac.compare_digest(expected_signature, received_signature)
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Pub/Sub OIDC bearer token.",
+        )
+
+    token = authorization.split(" ", 1)[1].strip()
+
+    audience = os.getenv("GMAIL_PUBSUB_AUDIENCE")
+
+    if not audience:
+        raise HTTPException(
+            status_code=500,
+            detail="GMAIL_PUBSUB_AUDIENCE is not configured.",
+        )
+
+    try:
+        claims = id_token.verify_oauth2_token(
+            token,
+            requests.Request(),
+            audience=audience,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Pub/Sub OIDC token.",
+        ) from exc
+
+    issuer = claims.get("iss")
+
+    if issuer not in {
+        "https://accounts.google.com",
+        "accounts.google.com",
+    }:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid OIDC token issuer.",
+        )
