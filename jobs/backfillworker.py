@@ -10,12 +10,14 @@ from services.rate_limiter import acquire_token
 BATCH_SIZE = 100
 
 
-def start_backfill(user_id: str) -> int:
+def start_backfill(user_id: str, limit: int = 10) -> int:
     """
     Kicks off a historical backfill for IITJ emails only.
 
+    Queues at most `limit` messages for testing.
     Returns the number of batches queued.
     """
+
     creds = get_valid_credentials(user_id)
 
     gmail = build(
@@ -25,17 +27,20 @@ def start_backfill(user_id: str) -> int:
     )
 
     batches_queued = 0
+    total_queued = 0
     page_token = None
 
-    while True:
+    while total_queued < limit:
         acquire_token(bucket="gmail_api")
+
+        remaining = limit - total_queued
 
         response = (
             gmail.users()
             .messages()
             .list(
                 userId="me",
-                maxResults=BATCH_SIZE,
+                maxResults=min(BATCH_SIZE, remaining),
                 pageToken=page_token,
                 q="from:iitj.ac.in",
             )
@@ -54,6 +59,7 @@ def start_backfill(user_id: str) -> int:
             )
 
             batches_queued += 1
+            total_queued += len(message_ids)
 
         page_token = response.get("nextPageToken")
 

@@ -1,12 +1,8 @@
 from googleapiclient.discovery import build
 
 from jobs.celery_app import celery_app
-
 from services.gmail_auth import get_valid_credentials
-#from services.email_processing import extract_from_email
-#from services.chunking import chunk_record
-#from services.embeddings import embed_chunks
-#from services.vectorstore import upsert_chunks
+
 from services.rate_limiter import acquire_token
 from services.sender_filter import (
     fetch_from_header,
@@ -35,7 +31,7 @@ def process_new_email_task(
             credentials=creds,
         )
 
-        # Check the sender using metadata BEFORE downloading
+        # Check sender using metadata BEFORE downloading
         # the full email body.
         from_header = fetch_from_header(
             gmail,
@@ -68,7 +64,7 @@ def process_new_email_task(
 
     except Exception as exc:
         # Actual processing/API failures are retried.
-        # Sender rejection above is returned normally and is NOT retried.
+        # Sender rejection above is NOT retried.
         raise self.retry(exc=exc)
 
 
@@ -136,39 +132,28 @@ def _index_email(
     gmail=None,
 ) -> None:
     """
-    Shared tail end:
-    extract -> chunk -> embed -> upsert.
+    Temporary extraction-stage stub.
+
+    For now we only verify that the Gmail message
+    passed the IITJ sender filter.
     """
-    records = extract_from_email(
-        message,
-        gmail=gmail,
+
+    headers = message.get("payload", {}).get("headers", [])
+
+    sender = ""
+    subject = ""
+
+    for header in headers:
+        name = header.get("name", "").lower()
+        value = header.get("value", "")
+
+        if name == "from":
+            sender = value
+
+        elif name == "subject":
+            subject = value
+
+    print(
+        f"[Extraction Test] sender={sender} "
+        f"subject={subject}"
     )
-
-    if not records:
-        print(
-            f"[Dedup] Email {message.get('id')} "
-            "already processed or empty. Skipping."
-        )
-        return
-
-    for record in records:
-        chunks = chunk_record(record)
-
-        texts = [
-            chunk["text"]
-            for chunk in chunks
-        ]
-
-        embeddings = embed_chunks(texts)
-
-        upsert_chunks(
-            chunks,
-            embeddings,
-        )
-
-        print(
-            f"[Pinecone] Successfully stored "
-            f"{len(chunks)} chunk(s) for source "
-            f"'{record.get('source')}' "
-            f"(doc_id: {record.get('doc_id')})."
-        )
