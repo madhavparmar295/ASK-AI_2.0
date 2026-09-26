@@ -1,82 +1,149 @@
+import asyncio
+from urllib.parse import urljoin, urlparse
+
 import httpx
-from xml.etree import ElementTree
-from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
-from urllib.robotparser import RobotFileParser
-
-TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "gclid", "fbclid"}
+from bs4 import BeautifulSoup
 
 
-def get_sitemap_urls(domain: str) -> list[str]:
-    """Try the domain's sitemap.xml first -- fast and authoritative."""
+USER_AGENT = "ASK-AI-Website-Ingestion/1.0"
+
+
+async def _fetch(url: str):
     try:
-        resp = httpx.get(f"{domain}/sitemap.xml", timeout=10)
-        root = ElementTree.fromstring(resp.content)
-        ns = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
-        return [el.text for el in root.iter(f"{ns}loc")]
-    except Exception:
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            follow_redirects=True,
+            verify=False,
+            headers={"User-Agent": USER_AGENT},
+        ) as client:
+            response = await client.get(url)
+
+            print(
+                f"[Frontier] {response.status_code} "
+                f"{response.url}"
+            )
+
+            return response
+
+    except Exception as e:
+        print(f"[Frontier] Failed: {url}")
+        print(f"[Frontier] Error: {e}")
+        return None
+
+
+def _normalize(url: str):
+    parsed = urlparse(url)
+
+    if parsed.scheme not in ("http", "https"):
+        return None
+
+    # Remove fragments
+    return parsed._replace(fragment="").geturl()
+
+
+def _same_domain(url: str, domain: str):
+    return urlparse(url).netloc.lower() == domain.lower()
+
+
+async def _discover(start_url: str):
+    start_url = _normalize(start_url)
+
+    if not start_url:
         return []
 
+    parsed = urlparse(start_url)
+    domain = parsed.netloc
 
-def bfs_crawl(domain: str, max_depth: int = 3, max_pages: int = 500) -> list[str]:
-    """Fallback: breadth-first crawl from the homepage if no sitemap."""
-    import httpx
-    from bs4 import BeautifulSoup
+    discovered = {start_url}
 
-    seen = {domain}
-    queue = [(domain, 0)]
-    found = []
-    while queue and len(found) < max_pages:
-        url, depth = queue.pop(0)
-        if depth > max_depth:
-            continue
-        try:
-            resp = httpx.get(url, timeout=10)
-            found.append(url)
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for a in soup.find_all("a", href=True):
-                link = httpx.URL(url).join(a["href"])
-                link_str = str(link)
-                if domain in link_str and link_str not in seen:
-                    seen.add(link_str)
-                    queue.append((link_str, depth + 1))
-        except Exception:
-            continue
-    return found
+    print(f"[Frontier] Starting URL: {start_url}")
+    print(f"[Frontier] Domain: {domain}")
+
+    # ---------------------------------------------------------
+    # 1. Try sitemap.xml
+    # ---------------------------------------------------------
+    sitemap_url = urljoin(start_url, "/sitemap.xml")
+
+    print(f"[Frontier] Checking sitemap: {sitemap_url}")
+
+    response = await _fetch(sitemap_url)
+
+    if response and response.status_code == 200:
+        content_type = response.headers.get("content-type", "").lower()
+
+        if "xml" in content_type or response.text.lstrip().startswith("<"):
+            soup = BeautifulSoup(response.text, "xml")
+
+            sitemap_urls = soup.find_all("loc")
+
+            for loc in sitemap_urls:
+                if not loc.text:
+                    continue
+
+                url = _normalize(loc.text.strip())
+
+                if url and _same_domain(url, domain):
+                    discovered.add(url)
+
+            print(
+                f"[Frontier] Sitemap URLs discovered: "
+                f"{len(discovered)}"
+            )
+
+    # ---------------------------------------------------------
+    # 2. Fetch homepage and discover internal links
+    # ---------------------------------------------------------
+    response = await _fetch(start_url)
+
+    if response and response.status_code < 500:
+        html = response.text
+
+        soup = BeautifulSoup(html, "html.parser")
+
+        for tag in soup.find_all("a", href=True):
+            href = tag["href"].strip()
+
+            if not href:
+                continue
+
+            absolute_url = urljoin(start_url, href)
+            url = _normalize(absolute_url)
+
+            if url and _same_domain(url, domain):
+                discovered.add(url)
+
+        print(
+            f"[Frontier] Homepage links discovered: "
+            f"{len(discovered)}"
+        )
+
+    # Keep the first crawl manageable for testing.
+    urls = list(discovered)[:100]
+
+    return urls
 
 
-def normalize_url(url: str) -> str:
-    """Strip tracking params, lowercase host, drop fragment."""
-    parsed = urlparse(url)
-    query = parse_qs(parsed.query)
-    clean_query = {k: v for k, v in query.items() if k not in TRACKING_PARAMS}
-    return urlunparse(parsed._replace(
-        query=urlencode(clean_query, doseq=True), fragment="",
-        netloc=parsed.netloc.lower(),
-    ))
+def build_frontier(domain):
+    """
+    Synchronous wrapper used by website_processing.py.
+    """
+    return asyncio.run(_discover(domain))
 
 
-def is_allowed_by_robots(url: str, user_agent: str = "ASK-AI-Bot") -> bool:
-    parsed = urlparse(url)
-    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-    rp = RobotFileParser()
-    rp.set_url(robots_url)
-    try:
-        rp.read()
-        return rp.can_fetch(user_agent, url)
-    except Exception:
-        return True  # if robots.txt is unreachable, default to allowed
+if __name__ == "__main__":
+    import sys
 
+    if len(sys.argv) < 2:
+        print(
+            "Usage: python -m services.website_frontier "
+            "https://iitj.ac.in"
+        )
+        sys.exit(1)
 
-def build_frontier(domain: str) -> list[str]:
-    """Single entry point: sitemap first, BFS fallback, normalized + robots-checked."""
-    urls = get_sitemap_urls(domain) or bfs_crawl(domain)
-    seen = set()
-    result = []
-    for raw_url in urls:
-        url = normalize_url(raw_url)
-        if url in seen:
-            continue
-        seen.add(url)
-        if is_allowed_by_robots(url):
-            result.append(url)
-    return result
+    urls = build_frontier(sys.argv[1])
+
+    print("\n=== FRONTIER RESULT ===")
+    print(f"Total URLs: {len(urls)}")
+
+    for url in urls:
+        print(url)

@@ -1,34 +1,97 @@
-import trafilatura
-import pandas as pd
 from io import StringIO
+from urllib.parse import urljoin
 
-LOW_CONTENT_THRESHOLD_CHARS = 100
+import pandas as pd
+import trafilatura
+from bs4 import BeautifulSoup
 
 
-def extract_content(html: str, url: str) -> dict:
-    """Returns {"text": ..., "low_content": bool, "title": ...}"""
-    main_text = trafilatura.extract(html, favor_recall=True) or ""
-    tables_md = ""
+def extract_content(html: str, url: str):
+    """
+    Extract the main readable content from an HTML page.
+
+    Returns:
+        {
+            "title": str,
+            "text": str
+        }
+    """
+
+    if not html:
+        return None
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Get page title
+    title_tag = soup.find("title")
+    title = title_tag.get_text(" ", strip=True) if title_tag else url
+
+    # Remove elements that usually contain navigation/noise
+    for tag in soup(["script", "style", "noscript", "svg"]):
+        tag.decompose()
+
+    # Main article/page text using Trafilatura
+    text = trafilatura.extract(
+        str(soup),
+        include_links=False,
+        include_images=False,
+        include_tables=True,
+        favor_precision=True,
+    )
+
+    # Fallback if Trafilatura doesn't extract anything
+    if not text:
+        text = soup.get_text("\n", strip=True)
+
+    # Extract HTML tables separately
     try:
         tables = pd.read_html(StringIO(html))
-        for df in tables:
-            tables_md += df.to_markdown(index=False) + "\n\n"
-    except ValueError:
-        pass  # no <table> elements on this page -- fine, not an error
 
-    full_text = (main_text + "\n\n" + tables_md).strip()
+        if tables:
+            table_text = []
+
+            for table in tables:
+                table_text.append(table.to_string(index=False))
+
+            if table_text:
+                text = (text or "") + "\n\n" + "\n\n".join(table_text)
+
+    except Exception as e:
+        print(f"[Website Extract] Table extraction skipped: {e}")
+
+    if not text or not text.strip():
+        return None
+
     return {
-        "text": full_text,
-        "low_content": len(full_text) < LOW_CONTENT_THRESHOLD_CHARS,
-        "title": extract_title(html) or url,
+        "title": title,
+        "text": text.strip(),
     }
 
 
-def extract_title(html: str) -> str:
-    metadata = trafilatura.extract_metadata(html)
-    return metadata.title if metadata and metadata.title else ""
+def find_pdf_links(html: str, base_url: str):
+    """
+    Find PDF links present on a webpage.
 
+    PDF files are only detected here.
+    They are NOT downloaded or extracted yet.
+    """
 
-# low_content=True is a flag, not a rejection -- near-empty pages are kept and
-# marked for review rather than silently dropped, matching the same instinct as
-# email_processing.py returning None only for genuinely empty attachments.
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    pdf_links = set()
+
+    for link in soup.find_all("a", href=True):
+        href = link["href"].strip()
+
+        if not href:
+            continue
+
+        absolute_url = urljoin(base_url, href)
+
+        if absolute_url.lower().split("?")[0].endswith(".pdf"):
+            pdf_links.add(absolute_url)
+
+    return sorted(pdf_links)
