@@ -5,6 +5,7 @@ from pydantic import BaseModel
 class QueryRequest(BaseModel):
     question: str
     user_email: str
+    chat_history: Optional[list[dict]] = None
 
 
 class SourceChunk(BaseModel):
