@@ -1,62 +1,72 @@
-"""
-Security helpers for Google Pub/Sub push webhooks.
-
-Pub/Sub push requests carry an OIDC bearer token in the Authorization
-header. We verify that token before processing the notification.
-"""
-
 import os
 
-from fastapi import HTTPException, Request
 from google.auth.transport import requests
 from google.oauth2 import id_token
 
 
-def verify_pubsub_oidc_token(request: Request) -> None:
+PUBSUB_OIDC_AUDIENCE = os.getenv("PUBSUB_OIDC_AUDIENCE")
+PUBSUB_OIDC_SERVICE_ACCOUNT = os.getenv("PUBSUB_OIDC_SERVICE_ACCOUNT")
+
+
+def verify_pubsub_oidc_token(authorization: str | None) -> dict:
     """
-    Verify the Google-issued OIDC token attached to a Pub/Sub push.
+    Verify the OIDC JWT sent by Google Pub/Sub.
 
-    The expected audience is configured through
-    GMAIL_PUBSUB_AUDIENCE.
+    The token must:
+    - be sent as: Authorization: Bearer <JWT>
+    - have the expected audience
+    - be issued by Google
+    - have a verified email
+    - come from the configured Pub/Sub push service account
     """
 
-    authorization = request.headers.get("authorization", "")
+    if not authorization:
+        raise ValueError("Missing Authorization header")
 
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="Missing Pub/Sub OIDC bearer token.",
+    parts = authorization.split()
+
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise ValueError("Invalid Authorization header")
+
+    token = parts[1]
+
+    if not PUBSUB_OIDC_AUDIENCE:
+        raise RuntimeError(
+            "PUBSUB_OIDC_AUDIENCE is not configured"
         )
 
-    token = authorization.split(" ", 1)[1].strip()
-
-    audience = os.getenv("GMAIL_PUBSUB_AUDIENCE")
-
-    if not audience:
-        raise HTTPException(
-            status_code=500,
-            detail="GMAIL_PUBSUB_AUDIENCE is not configured.",
+    if not PUBSUB_OIDC_SERVICE_ACCOUNT:
+        raise RuntimeError(
+            "PUBSUB_OIDC_SERVICE_ACCOUNT is not configured"
         )
 
-    try:
-        claims = id_token.verify_oauth2_token(
-            token,
-            requests.Request(),
-            audience=audience,
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid Pub/Sub OIDC token.",
-        ) from exc
+    # Verify Google's signed OIDC token and its audience.
+    claims = id_token.verify_oauth2_token(
+        token,
+        requests.Request(),
+        audience=PUBSUB_OIDC_AUDIENCE,
+    )
 
+    # Verify token issuer.
     issuer = claims.get("iss")
 
-    if issuer not in {
+    if issuer not in (
         "https://accounts.google.com",
         "accounts.google.com",
-    }:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid OIDC token issuer.",
+    ):
+        raise ValueError("Invalid OIDC token issuer")
+
+    # Verify that Google's email claim is verified.
+    if claims.get("email_verified") is not True:
+        raise ValueError("OIDC email is not verified")
+
+    # Verify that the token was issued for the exact
+    # Pub/Sub push service account configured in GCP.
+    token_email = claims.get("email")
+
+    if token_email != PUBSUB_OIDC_SERVICE_ACCOUNT:
+        raise ValueError(
+            "Unexpected Pub/Sub service account"
         )
+
+    return claims
