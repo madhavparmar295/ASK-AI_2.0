@@ -35,6 +35,7 @@ from services.dedup import (
     is_already_processed,
     mark_processed,
 )
+from services.storage import save_file
 from services.sender_filter import is_allowed_sender
 
 
@@ -128,6 +129,28 @@ def extract_from_email(
     return records
 
 
+import re
+from datetime import datetime, timezone
+from services.storage import is_allowed_file, save_file
+from services.document_loader import load_document
+from services.rate_limiter import acquire_token
+
+
+def _safe_b64decode(data: str | bytes) -> bytes:
+    """Safely decode base64 / base64url data, adding missing padding."""
+    if not data:
+        return b""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    data = data.replace(b"-", b"+").replace(b"_", b"/")
+    pad = b"=" * ((4 - len(data) % 4) % 4)
+    try:
+        return base64.b64decode(data + pad)
+    except Exception as exc:
+        print(f"[Attachment] Base64 decode failed: {exc}")
+        return b""
+
+
 def _build_record(
     raw_text: str,
     source: str,
@@ -136,15 +159,17 @@ def _build_record(
     filename: str = "",
 ) -> dict:
     protected_text = apply_pii_protection(raw_text)
-
     access_level = classify_access_level(protected_text)
 
     record = {
         "text": protected_text,
+        "embed_text": protected_text,
         "source": source,
         "source_type": "email",
         "access_level": access_level,
         "doc_id": doc_id,
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "attachment_path": None,
     }
 
     if meta:
@@ -158,18 +183,54 @@ def _build_record(
             f"Date: {date}]\n"
         )
 
-        record["text"] = (
-            header_prefix + protected_text
-        )
-
+        record["text"] = header_prefix + protected_text
+        record["embed_text"] = header_prefix + protected_text
         record["sender"] = sender
         record["subject"] = subject
         record["date"] = date
-        record["filename"] = (
-            filename if filename else source
-        )
+        record["filename"] = filename if filename else source
 
     return record
+
+
+def _build_attachment_record(
+    extracted_text: str,
+    filename: str,
+    doc_id: str,
+    saved_path: str,
+    meta: dict = None,
+) -> dict:
+    """Build an attachment record formatted exactly like manual uploaded docs."""
+    protected_text = apply_pii_protection(extracted_text)
+    access_level = classify_access_level(protected_text)
+
+    sender = meta.get("sender", "") if meta else ""
+    subject = meta.get("subject", "") if meta else ""
+    date = meta.get("date", "") if meta else ""
+
+    header_prefix = (
+        f"[Sender: {sender} | "
+        f"Subject: {subject} | "
+        f"Date: {date}]\n"
+        f"[Attachment: {filename}]\n"
+    )
+
+    return {
+        # text is intentionally empty for postgres content column, like manual uploads
+        "text": "",
+        # embed_text includes header + extracted text for 384-d HNSW vector embedding
+        "embed_text": header_prefix + protected_text,
+        "doc_id": doc_id,
+        "source": filename,
+        "filename": filename,
+        "source_type": "email_attachment",
+        "access_level": access_level,
+        "sender": sender,
+        "subject": subject,
+        "date": date,
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "attachment_path": saved_path,
+    }
 
 
 def _process_single_attachment(
@@ -177,7 +238,21 @@ def _process_single_attachment(
     message_id: str,
     meta: dict = None,
 ) -> dict | None:
-    filename = attachment["filename"]
+    filename = attachment.get("filename", "")
+    if not filename:
+        return None
+
+    raw_bytes = attachment.get("bytes", b"")
+    if not raw_bytes and attachment.get("data"):
+        raw_bytes = _safe_b64decode(attachment["data"])
+
+    if not raw_bytes:
+        print(f"[Attachment] Skipping {filename}: no data could be read.")
+        return None
+
+    if not is_allowed_file(filename):
+        print(f"[Attachment] Skipping unsupported attachment type: {filename}")
+        return None
 
     ext = (
         filename.rsplit(".", 1)[-1].lower()
@@ -185,76 +260,37 @@ def _process_single_attachment(
         else ""
     )
 
-    raw_bytes = attachment.get("bytes") or (
-        base64.urlsafe_b64decode(
-            attachment["data"]
-        )
-        if attachment.get("data")
-        else b""
-    )
+    # 1. Persist the raw attachment file to permanent storage folder immediately.
+    saved_path = save_file(raw_bytes, filename)
+    print(f"[Attachment] Saved {filename} to {saved_path}")
 
-    if not raw_bytes:
-        return None
-
-    content_hash = hashlib.sha256(
-        raw_bytes
-    ).hexdigest()
-
-    # Hash-based OCR cache.
-    cached_text = get_cached_ocr_result(
-        content_hash
-    )
+    # 2. Check OCR cache or extract text
+    content_hash = hashlib.sha256(raw_bytes).hexdigest()
+    cached_text = get_cached_ocr_result(content_hash)
 
     if cached_text is not None:
-        return _build_record(
-            cached_text,
-            source=filename,
-            doc_id=f"{message_id}:{filename}",
-            meta=meta,
-            filename=filename,
-        )
+        extracted_text = cached_text
+    else:
+        try:
+            extracted_text = load_document(saved_path)
+            if not extracted_text or not extracted_text.strip():
+                print(f"[Attachment] No text could be extracted from {filename}")
+                return None
 
-    with tempfile.NamedTemporaryFile(
-        suffix=f".{ext}",
-        delete=False,
-    ) as tmp:
-        tmp.write(raw_bytes)
-        temp_path = tmp.name
+            if attachment_required_ocr(saved_path, ext):
+                store_ocr_result(content_hash, extracted_text)
 
-    try:
-        text = process_attachment(
-            temp_path,
-            ext,
-        )
-
-        if not text.strip():
+        except Exception as exc:
+            print(f"[Attachment] Extraction error for {filename}: {exc}")
             return None
 
-        # Check whether OCR was required before
-        # removing the temporary file.
-        if attachment_required_ocr(
-            temp_path,
-            ext,
-        ):
-            store_ocr_result(
-                content_hash,
-                text,
-            )
-
-    except ValueError:
-        # Unsupported attachment type.
-        return None
-
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-    return _build_record(
-        text,
-        source=filename,
-        doc_id=f"{message_id}:{filename}",
-        meta=meta,
+    # 3. Build attachment record matching manual uploads
+    return _build_attachment_record(
+        extracted_text=extracted_text,
         filename=filename,
+        doc_id=f"{message_id}:{filename}",
+        saved_path=saved_path,
+        meta=meta,
     )
 
 
@@ -294,19 +330,11 @@ def _extract_mime_part(
     Recursively find and decode the first requested MIME part.
     """
     if payload.get("mimeType") == mime_type:
-        data = payload.get("body", {}).get(
-            "data",
-            "",
-        )
-
+        data = payload.get("body", {}).get("data", "")
         if data:
             try:
-                return base64.urlsafe_b64decode(
-                    data
-                ).decode(
-                    "utf-8",
-                    errors="ignore",
-                )
+                decoded = _safe_b64decode(data)
+                return decoded.decode("utf-8", errors="ignore")
             except Exception:
                 return ""
 
@@ -315,7 +343,6 @@ def _extract_mime_part(
             part,
             mime_type,
         )
-
         if result:
             return result
 
@@ -345,30 +372,38 @@ def _get_attachments(
     for every attachment part in the message.
     """
     attachments = []
-
     message_id = message.get("id")
     payload = message.get("payload", {})
 
     def _walk_parts(parts):
         for part in parts:
-            filename = part.get("filename")
-            body = part.get("body", {})
-            attachment_id = body.get(
-                "attachmentId"
-            )
+            filename = part.get("filename", "")
 
-            if filename and attachment_id:
+            # If filename not directly on part, check Content-Disposition or Content-Type headers
+            if not filename:
+                for header in part.get("headers", []):
+                    h_name = header.get("name", "").lower()
+                    if h_name in ("content-disposition", "content-type"):
+                        val = header.get("value", "")
+                        match = re.search(r'filename=["\']?([^"\';]+)["\']?', val, re.IGNORECASE)
+                        if match:
+                            filename = match.group(1).strip()
+                            break
+
+            body = part.get("body", {})
+            attachment_id = body.get("attachmentId")
+            inline_data = body.get("data")
+
+            # Check if this part has an attachment or file data
+            if filename and (attachment_id or inline_data):
                 raw_bytes = b""
 
-                data = body.get("data")
+                if inline_data:
+                    raw_bytes = _safe_b64decode(inline_data)
 
-                if data:
-                    raw_bytes = (
-                        base64.urlsafe_b64decode(data)
-                    )
-
-                elif gmail and message_id:
+                if not raw_bytes and attachment_id and gmail and message_id:
                     try:
+                        acquire_token(bucket="gmail_api")
                         att_res = (
                             gmail.users()
                             .messages()
@@ -381,33 +416,31 @@ def _get_attachments(
                             .execute()
                         )
 
-                        att_data = att_res.get(
-                            "data",
-                            "",
-                        )
-
+                        att_data = att_res.get("data", "")
                         if att_data:
-                            raw_bytes = (
-                                base64.urlsafe_b64decode(
-                                    att_data
-                                )
-                            )
+                            raw_bytes = _safe_b64decode(att_data)
 
                     except Exception as exc:
                         print(
-                            f"Failed to fetch attachment "
-                            f"{attachment_id} for msg "
+                            f"[Attachment] Failed to fetch attachment "
+                            f"{attachment_id} ({filename}) for msg "
                             f"{message_id}: {exc}"
                         )
 
-                attachments.append(
-                    {
-                        "filename": filename,
-                        "data": data or "",
-                        "bytes": raw_bytes,
-                        "attachmentId": attachment_id,
-                    }
-                )
+                if raw_bytes:
+                    attachments.append(
+                        {
+                            "filename": filename,
+                            "data": inline_data or "",
+                            "bytes": raw_bytes,
+                            "attachmentId": attachment_id,
+                        }
+                    )
+                else:
+                    print(
+                        f"[Attachment] Warning: attachment {filename} "
+                        f"in msg {message_id} could not be retrieved."
+                    )
 
             if "parts" in part:
                 _walk_parts(part["parts"])

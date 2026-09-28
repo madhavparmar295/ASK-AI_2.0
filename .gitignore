@@ -4,3 +4,6 @@ client_secret.json
 tokens/
 __pycache__/
 *.pyc
+ocr_cache.json
+processed_message_ids.json
+storage/

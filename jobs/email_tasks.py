@@ -1,4 +1,5 @@
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from jobs.celery_app import celery_app
 from services.gmail_auth import get_valid_credentials
@@ -65,6 +66,11 @@ def process_new_email_task(
             gmail=gmail,
         )
 
+    except HttpError as exc:
+        if exc.resp.status == 404:
+            print(f"[Email Tasks] Message {message_id} not found (404), skipping.")
+            return
+        raise self.retry(exc=exc)
     except Exception as exc:
         # Actual processing/API failures are retried.
         # Sender rejection above is NOT retried.
@@ -218,33 +224,22 @@ def process_history_task(
 
     except Exception as exc:
         raise self.retry(exc=exc)
+from services.email_processing import extract_from_email
+from services.ingest import ingest_record
+
 def _index_email(
     message: dict,
     gmail=None,
 ) -> None:
-    """
-    Temporary extraction-stage stub.
+    """Shared tail end: extract -> store document metadata + 384-d vector in Postgres."""
+    records = extract_from_email(message, gmail=gmail)
+    if not records:
+        print(f"[Dedup/Filter] Email {message.get('id')} rejected, processed, or empty. Skipping.")
+        return
 
-    For now we only verify that the Gmail message
-    passed the IITJ sender filter.
-    """
-
-    headers = message.get("payload", {}).get("headers", [])
-
-    sender = ""
-    subject = ""
-
-    for header in headers:
-        name = header.get("name", "").lower()
-        value = header.get("value", "")
-
-        if name == "from":
-            sender = value
-
-        elif name == "subject":
-            subject = value
-
-    print(
-        f"[Extraction Test] sender={sender} "
-        f"subject={subject}"
-    )
+    for record in records:
+        ingest_record(record)
+        print(
+            f"[Postgres] Stored document '{record.get('source')}' "
+            f"(doc_id: {record.get('doc_id')})."
+        )

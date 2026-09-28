@@ -30,22 +30,36 @@ def verify_pubsub_oidc_token(authorization: str | None) -> dict:
 
     token = parts[1]
 
-    if not PUBSUB_OIDC_AUDIENCE:
+    audience_cfg = os.getenv("PUBSUB_OIDC_AUDIENCE") or PUBSUB_OIDC_AUDIENCE
+    if not audience_cfg:
         raise RuntimeError(
             "PUBSUB_OIDC_AUDIENCE is not configured"
         )
 
-    if not PUBSUB_OIDC_SERVICE_ACCOUNT:
+    service_account_cfg = os.getenv("PUBSUB_OIDC_SERVICE_ACCOUNT") or PUBSUB_OIDC_SERVICE_ACCOUNT
+    if not service_account_cfg:
         raise RuntimeError(
             "PUBSUB_OIDC_SERVICE_ACCOUNT is not configured"
         )
 
-    # Verify Google's signed OIDC token and its audience.
+    # Verify Google's signed OIDC token
     claims = id_token.verify_oauth2_token(
         token,
         requests.Request(),
-        audience=PUBSUB_OIDC_AUDIENCE,
     )
+
+    # Check audience: allow base URL and /webhook/gmail endpoint URL
+    base_aud = audience_cfg.rstrip("/")
+    allowed_audiences = {
+        base_aud,
+        f"{base_aud}/webhook/gmail",
+        base_aud[:-len("/webhook/gmail")] if base_aud.endswith("/webhook/gmail") else base_aud,
+    }
+    token_aud = claims.get("aud")
+    if token_aud not in allowed_audiences:
+        raise ValueError(
+            f"Token has wrong audience {token_aud}, expected one of {list(allowed_audiences)}"
+        )
 
     # Verify token issuer.
     issuer = claims.get("iss")
@@ -64,7 +78,7 @@ def verify_pubsub_oidc_token(authorization: str | None) -> dict:
     # Pub/Sub push service account configured in GCP.
     token_email = claims.get("email")
 
-    if token_email != PUBSUB_OIDC_SERVICE_ACCOUNT:
+    if token_email != service_account_cfg:
         raise ValueError(
             "Unexpected Pub/Sub service account"
         )

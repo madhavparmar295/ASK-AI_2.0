@@ -16,4 +16,8 @@ celery_app.conf.update(
     task_acks_late=True,  # don't ack until the task actually finishes
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,  # avoid one worker hoarding many slow OCR tasks
+    broker_pool_limit=1,  # minimal connection pooling for cloud Redis
+    redis_max_connections=5,  # cap connection pool
+    worker_send_task_events=False,  # disable event monitoring overhead
+    broker_connection_retry_on_startup=True,
 )

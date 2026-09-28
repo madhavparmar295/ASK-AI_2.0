@@ -303,6 +303,14 @@ def trigger_backfill(
         ...,
         description="The authenticated user's email address",
     ),
+    limit: int = Query(
+        10,
+        description="Max number of emails to backfill",
+    ),
+    clear_dedup: bool = Query(
+        False,
+        description="Whether to clear dedup cache to reprocess emails",
+    ),
 ):
     """
     Trigger a full historical mailbox scan.
@@ -312,9 +320,14 @@ def trigger_backfill(
     """
     try:
         from jobs.backfillworker import start_backfill
+        from services.dedup import clear_dedup_store
+
+        if clear_dedup:
+            clear_dedup_store()
 
         batches_queued = start_backfill(
-            user_id=user_email
+            user_id=user_email,
+            limit=limit,
         )
 
         return {
@@ -324,7 +337,7 @@ def trigger_backfill(
             ),
             "user_email": user_email,
             "batches_queued": batches_queued,
-            "total_emails_queued_approx": batches_queued * 100,
+            "emails_limit": limit,
             "note": (
                 "Celery workers are processing these batches "
                 "in the background."
