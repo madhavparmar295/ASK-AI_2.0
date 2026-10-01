@@ -46,7 +46,35 @@ export async function getDemoResponse(message) {
 
   // Determine response type based on message content
   let responses;
-  if (lowerMessage.includes('hello') || lowerMessage.includes('hi') || lowerMessage.includes('hey')) {
+  if (lowerMessage.includes('deadline') || lowerMessage.includes('email') || lowerMessage.includes('inbox')) {
+    responses = [
+      `Here are your upcoming deadlines:\n\n` +
+      `1. **Project Milestone 2**: Submission closes this Friday at 11:59 PM.\n` +
+      `2. **Hostel Fee Clearance**: Clearance required before the 5th of this month.\n` +
+      `3. **Course Feedback**: Portal is currently open for the term.`
+    ];
+  } else if (lowerMessage.includes('extract') || lowerMessage.includes('pdf') || lowerMessage.includes('document')) {
+    responses = [
+      `The uploaded document covers the system architecture, semantic retrieval pipeline, and vector indexing details.`
+    ];
+  } else if (lowerMessage.includes('receipt') || lowerMessage.includes('hostel') || lowerMessage.includes('grade')) {
+    responses = [
+      `Here are your records:\n\n` +
+      `• **Hostel Fee Receipt**: Ref #HST-2026-8812 (Paid in full).\n` +
+      `• **Room Allotment**: Block C, Room 314 confirmed for the current term.\n` +
+      `• **Semester Grade Statement**: All core credits fulfilled.`
+    ];
+  } else if (lowerMessage.includes('draft') || lowerMessage.includes('follow-up') || lowerMessage.includes('inquiry')) {
+    responses = [
+      `Here is the email draft:\n\n` +
+      `**Subject**: Follow-Up: Pending Inquiry Regarding Documentation & Next Steps\n\n` +
+      `Dear Team,\n\n` +
+      `I hope this email finds you well.\n\n` +
+      `I am following up on our previous correspondence regarding the status of the submitted inquiry. Please let me know if any updates or further details are needed.\n\n` +
+      `Thank you for your assistance.\n\n` +
+      `Best regards,\nParth`
+    ];
+  } else if (lowerMessage.includes('hello') || lowerMessage.includes('hi') || lowerMessage.includes('hey')) {
     responses = demoResponses.greeting;
   } else if (lowerMessage.includes('quantum')) {
     responses = demoResponses.quantum;

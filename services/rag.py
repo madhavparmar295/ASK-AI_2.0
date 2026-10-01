@@ -1,15 +1,25 @@
 import os
-
 from dotenv import load_dotenv
-from groq import Groq
 
 from services.contact_suggestions import build_fallback_message
 
 load_dotenv()
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+MODEL = os.getenv("LLM_MODEL", "gemma4:e2b")
 
-MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
+if LLM_PROVIDER == "ollama":
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+    except ImportError:
+        client = None
+else:
+    from groq import Groq
+
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 SYSTEM_PROMPT = """
 You are an AI assistant for document question answering.
@@ -68,16 +78,35 @@ def generate_answer(question: str, context_chunks: list[dict]) -> str:
 
     prompt = build_prompt(question, context_chunks)
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0,
-    )
+    if client is not None:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+        )
+        answer = response.choices[0].message.content
+    else:
+        import requests
 
-    answer = response.choices[0].message.content
+        api_url = OLLAMA_BASE_URL.replace("/v1", "") + "/api/chat"
+        resp = requests.post(
+            api_url,
+            json={
+                "model": MODEL,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                "stream": False,
+                "options": {"temperature": 0},
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        answer = resp.json().get("message", {}).get("content", "")
 
     # If the LLM itself said it couldn't find the answer, enrich with contact suggestions
     NOT_FOUND_PHRASE = "i could not find the answer"

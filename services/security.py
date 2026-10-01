@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
 import jwt
@@ -11,6 +12,8 @@ from database import get_db
 from models.user import User
 
 import bcrypt
+
+load_dotenv()
 
 # JWT configuration
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "ask-ai-super-secret-jwt-key-for-local-dev-replace-in-prod")

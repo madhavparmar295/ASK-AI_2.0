@@ -1,57 +1,83 @@
-import { actionButtons } from '../ui/ActionButton';
-import ActionButton from '../ui/ActionButton';
+import PromptCardsGrid from '../ui/PromptCardsGrid';
 import ChatInput from '../ui/ChatInput';
 import { useAuth } from '../../context/AuthContext';
-import { LogIn, Sparkles } from 'lucide-react';
+import { Menu, Sparkles, LogIn } from 'lucide-react';
 
-export default function MainContent({ onSend, onFileUpload, disabled = false }) {
+export default function MainContent({
+  onSend,
+  onFileUpload,
+  disabled = false,
+  onReplaySplash,
+  onOpenMobileSidebar,
+}) {
   const { user, isAuthenticated, openAuthModal } = useAuth();
-
-  const handleActionClick = (button) => {
-    if (button.description) {
-      onSend?.(button.description);
-    }
-  };
-
   const displayName = user?.name ? user.name.split(' ')[0] : null;
 
   return (
-    <main className="flex-1 flex flex-col justify-center items-center px-3 md:px-12 lg:px-20 w-full max-w-6xl mx-auto py-4 md:py-8">
-      {/* Gemini-Inspired Greeting (No floating logo) */}
-      <div className="w-full mb-6 md:mb-10 fade-in text-left">
-        <h1 className="text-3xl sm:text-4xl md:text-6xl font-semibold tracking-tight text-white mb-2 md:mb-3">
-          <span className="bg-gradient-to-r from-purple-400 via-indigo-300 to-pink-300 bg-clip-text text-transparent">
-            Hello, {isAuthenticated ? displayName : 'there'}
-          </span>
-        </h1>
-        <p className="text-lg sm:text-xl md:text-3xl text-gray-400 font-normal">
-          How can I help you today?
-        </p>
+    <div className="flex-1 flex flex-col justify-between items-center w-full max-w-5xl mx-auto px-4 sm:px-6 py-6 overflow-y-auto">
+      {/* Top action bar: Mobile menu button (on mobile) & Replay Intro button */}
+      <div className="top-actions w-full flex items-center justify-between">
+        <button
+          onClick={onOpenMobileSidebar}
+          className="md:hidden btn-action-ghost"
+          aria-label="Open navigation menu"
+        >
+          <Menu className="w-4 h-4" />
+          <span>Menu</span>
+        </button>
 
-        {/* Guest sign-in pill */}
+        <div className="ml-auto">
+          <button
+            className="btn-action-ghost"
+            id="btnReplaySplash"
+            onClick={onReplaySplash}
+            title="Replay Gemini splash entrance animation"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <polyline points="1 4 1 10 7 10" />
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+            </svg>
+            Replay Intro
+          </button>
+        </div>
+      </div>
+
+      {/* Center Stage Container */}
+      <div className="center-stage w-full my-auto py-8">
+        <h1 className="greeting-title">
+          Hello{isAuthenticated && displayName ? `, ${displayName}` : ''},
+        </h1>
+        <h2 className="greeting-subtitle">How can I help you today?</h2>
+
+        {/* Guest sign-in badge if unauthenticated */}
         {!isAuthenticated && (
           <button
             onClick={() => openAuthModal('login')}
-            className="mt-3 md:mt-4 inline-flex items-center gap-1.5 md:gap-2 px-3 py-1.5 md:px-4 md:py-2 rounded-full bg-purple-600/15 hover:bg-purple-600/25 text-purple-300 border border-purple-500/30 text-xs font-medium transition-all hover:scale-105 active:scale-95"
+            className="mb-6 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-gray-300 border border-white/10 text-xs font-medium transition-all hover:scale-[1.02] active:scale-95"
           >
-            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-            <span className="truncate max-w-[240px] sm:max-w-none">Sign in to search your private Gmail and documents</span>
-            <LogIn className="w-3.5 h-3.5 ml-1 opacity-70" />
+            <Sparkles className="w-3.5 h-3.5 text-white/70" />
+            <span>Sign in to access personalized emails & private files</span>
+            <LogIn className="w-3.5 h-3.5 opacity-60 ml-0.5" />
           </button>
         )}
+
+        {/* 4 Predefined Cards with dynamic cursor spotlight */}
+        <PromptCardsGrid onSelectPrompt={onSend} />
       </div>
 
-      {/* Suggested Prompt Cards: 2 columns on mobile, 4 columns on desktop */}
-      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 md:gap-4 mb-6 md:mb-10 w-full">
-        {actionButtons.map((button) => (
-          <ActionButton key={button.id} button={button} onClick={handleActionClick} />
-        ))}
-      </div>
-
-      {/* Bottom Chat Input */}
-      <div className="w-full">
-        <ChatInput onSend={onSend} onFileUpload={onFileUpload} disabled={disabled} />
-      </div>
-    </main>
+      {/* Floating Capsule Input Bar */}
+      <ChatInput
+        onSend={onSend}
+        onFileUpload={onFileUpload}
+        disabled={disabled}
+      />
+    </div>
   );
 }

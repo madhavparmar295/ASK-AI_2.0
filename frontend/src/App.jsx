@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { ChevronDown, ChevronUp, FileText, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import GeminiBackground from './components/background/GeminiBackground';
+import SplashScreen from './components/splash/SplashScreen';
+import GeometricBackground from './components/background/GeometricBackground';
 import Sidebar from './components/layout/Sidebar';
 import MainContent from './components/layout/MainContent';
 import ChatInput from './components/ui/ChatInput';
@@ -11,17 +11,18 @@ import HistoryDrawer from './components/history/HistoryDrawer';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { API_CONFIG, sendMessage, uploadFile } from './services/api';
 import { getDemoResponse } from './services/demoService';
-import logoImg from './assets/logo.png';
 import {
   fetchChatHistory,
   saveChatSession,
   deleteChatSession,
 } from './services/chatHistoryService';
+import { Sparkles, MessageSquare, Menu, Plus } from 'lucide-react';
 
 function ChatApp() {
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [expandedSources, setExpandedSources] = useState({});
+  const [replayCount, setReplayCount] = useState(0);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const messagesEndRef = useRef(null);
 
   // Chat History & Session State
@@ -73,13 +74,6 @@ function ChatApp() {
     };
   }, [isAuthenticated, user?.email]);
 
-  const toggleSources = (messageId) => {
-    setExpandedSources((prev) => ({
-      ...prev,
-      [messageId]: !prev[messageId],
-    }));
-  };
-
   // Start a fresh conversation
   const handleNewChat = () => {
     setMessages([]);
@@ -100,6 +94,11 @@ function ChatApp() {
     if (currentSessionId === sessionId) {
       handleNewChat();
     }
+  };
+
+  // Trigger splash replay
+  const handleReplaySplash = () => {
+    setReplayCount((prev) => prev + 1);
   };
 
   // Handle sending messages
@@ -133,7 +132,7 @@ function ChatApp() {
         });
       }
 
-      if (response.success) {
+      if (response && response.success) {
         const assistantMessage = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
@@ -144,26 +143,42 @@ function ChatApp() {
         const finalMessages = [...newMessages, assistantMessage];
         setMessages(finalMessages);
 
-        // Auto-save session to Django backend
+        // Auto-save session if authenticated
         if (isAuthenticated && user?.email) {
-          const syncRes = await saveChatSession(
-            user.email,
-            currentSessionId,
-            finalMessages
-          );
-          if (syncRes && syncRes.session_id) {
-            setCurrentSessionId(syncRes.session_id);
-            fetchChatHistory(user.email).then(setSessions);
+          try {
+            const syncRes = await saveChatSession(
+              user.email,
+              currentSessionId,
+              finalMessages
+            );
+            if (syncRes && syncRes.session_id) {
+              setCurrentSessionId(syncRes.session_id);
+              fetchChatHistory(user.email).then(setSessions);
+            }
+          } catch (syncErr) {
+            console.error('Session sync error:', syncErr);
           }
         }
       }
     } catch (error) {
       console.error('Error sending message:', error);
+      const isConnectionError =
+        error.name === 'TypeError' ||
+        error.message?.includes('Failed to fetch') ||
+        error.message?.includes('NetworkError') ||
+        error.message?.includes('Load failed') ||
+        error.message?.includes('timed out') ||
+        error.message?.includes('Network request failed');
+
+      const errorText = isConnectionError
+        ? 'Server is currently not available. Please ensure the backend server is running.'
+        : `⚠️ Error: ${error.message || 'Unable to process your request.'}`;
+
       const errorMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         isError: true,
-        content: `⚠️ Failed to get response: ${error.message}. Please check if the backend service is reachable.`,
+        content: errorText,
         timestamp: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, errorMessage]);
@@ -177,15 +192,21 @@ function ChatApp() {
     const uploadNotice = {
       id: Date.now().toString(),
       role: 'user',
-      content: `📎 Uploading document: ${file.name}...`,
+      content: `📎 Uploading document: **${file.name}**...`,
       timestamp: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, uploadNotice]);
     setIsLoading(true);
 
     try {
-      const activeEmail = user?.email || API_CONFIG.DEFAULT_USER_EMAIL;
-      const res = await uploadFile(file, activeEmail);
+      let res;
+      if (API_CONFIG.DEMO_MODE) {
+        res = await demoUploadFile(file);
+      } else {
+        const activeEmail = user?.email || API_CONFIG.DEFAULT_USER_EMAIL;
+        res = await uploadFile(file, activeEmail);
+      }
+
       const successNotice = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
@@ -195,11 +216,22 @@ function ChatApp() {
       setMessages((prev) => [...prev, successNotice]);
     } catch (error) {
       console.error('Error uploading file:', error);
+      const isConnectionError =
+        error.name === 'TypeError' ||
+        error.message?.includes('Failed to fetch') ||
+        error.message?.includes('NetworkError') ||
+        error.message?.includes('Load failed') ||
+        error.message?.includes('timed out');
+
+      const errorText = isConnectionError
+        ? 'Server is currently not available. Please ensure the backend server is running.'
+        : `❌ Document upload failed: ${error.message}`;
+
       const errorNotice = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         isError: true,
-        content: `❌ Document upload failed: ${error.message}`,
+        content: errorText,
         timestamp: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, errorNotice]);
@@ -209,14 +241,17 @@ function ChatApp() {
   };
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden text-gray-100 flex">
-      {/* Calm Gemini Dark Background */}
-      <GeminiBackground />
+    <div className="relative w-screen h-screen overflow-hidden flex">
+      {/* 1. Gemini-Style Animated Splash Screen */}
+      <SplashScreen forceReplay={replayCount} />
 
-      {/* Auth Modal */}
+      {/* 2. Geometric Background Grid & Ambient Glow */}
+      <GeometricBackground />
+
+      {/* 3. Auth Modal */}
       <AuthModal />
 
-      {/* History Drawer */}
+      {/* 4. History Drawer */}
       <HistoryDrawer
         isOpen={isHistoryDrawerOpen}
         onClose={() => setIsHistoryDrawerOpen(false)}
@@ -227,93 +262,155 @@ function ChatApp() {
         onDeleteSession={handleDeleteSession}
       />
 
-      {/* Sidebar Navigation: Desktop side bar + Mobile top header */}
+      {/* 5. Static Sidebar Navigation */}
       <Sidebar
         onOpenHistory={() => setIsHistoryDrawerOpen(true)}
         onNewChat={handleNewChat}
+        mobileOpen={isMobileSidebarOpen}
+        onCloseMobile={() => setIsMobileSidebarOpen(false)}
       />
 
-      {/* Main Full-Width Content Area */}
-      <div className="flex-1 md:pl-14 flex flex-col h-full w-full min-w-0 overflow-hidden">
+      {/* 6. Main Content Area */}
+      <main className="main-content">
         {messages.length === 0 ? (
-          // Welcome View when no messages
-          <div className="flex-1 overflow-y-auto flex flex-col w-full pt-16 md:pt-0">
-            <MainContent
-              onSend={handleSendMessage}
-              onFileUpload={handleFileUpload}
-              disabled={isLoading}
-            />
-          </div>
+          // Welcome View: Center Stage with 4 Prompt Cards
+          <MainContent
+            onSend={handleSendMessage}
+            onFileUpload={handleFileUpload}
+            disabled={isLoading}
+            onReplaySplash={handleReplaySplash}
+            onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
+          />
         ) : (
-          // Active Chat View: Full-width scroll container, scrollbar at edge of window
-          <div className="flex-1 flex flex-col h-full w-full min-w-0 overflow-hidden">
-            {/* Messages Scroll Area - pt-20 on mobile ensures first message is never hidden under the fixed header */}
-            <div className="flex-1 overflow-y-auto w-full px-3 md:px-12 lg:px-24 pt-20 pb-8 md:py-8">
-              <div className="max-w-4xl lg:max-w-5xl mx-auto w-full space-y-6">
-                {messages.map((msg) => (
+          // Active Conversation View
+          <div className="w-full h-full flex flex-col justify-between max-w-5xl mx-auto overflow-hidden">
+            {/* Top Bar with Replay Intro & New Chat triggers */}
+            <div className="top-actions w-full flex items-center justify-between pb-3 flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsMobileSidebarOpen(true)}
+                  className="md:hidden btn-action-ghost"
+                  aria-label="Open menu"
+                >
+                  <Menu className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={handleNewChat}
+                  className="btn-action-ghost"
+                  title="Start a new conversation"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>New Chat</span>
+                </button>
+              </div>
+
+              <button
+                className="btn-action-ghost"
+                id="btnReplaySplash"
+                onClick={handleReplaySplash}
+                title="Replay Gemini splash entrance animation"
+              >
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <polyline points="1 4 1 10 7 10" />
+                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                </svg>
+                Replay Intro
+              </button>
+            </div>
+
+            {/* Messages Scroll Area */}
+            <div className="flex-1 overflow-y-auto pr-1 py-4 space-y-5">
+              {messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`flex gap-3 w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'
+                    }`}
+                >
+                  {/* Assistant Avatar */}
+                  {msg.role === 'assistant' && (
+                    <div className="flex-shrink-0 w-8 h-8 rounded-xl bg-blue-600/15 border border-blue-400/20 flex items-center justify-center text-blue-300 shadow-sm mt-0.5">
+                      <svg
+                        width="15"
+                        height="15"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      >
+                        <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                        <polyline points="2 17 12 22 22 17" />
+                        <polyline points="2 12 12 17 22 12" />
+                      </svg>
+                    </div>
+                  )}
+
                   <div
-                    key={msg.id}
-                    className={`flex gap-3.5 ${msg.role === 'user' ? 'justify-end' : 'justify-start'
+                    className={`max-w-[85%] md:max-w-[78%] rounded-2xl px-5 py-3.5 shadow-lg backdrop-blur-md ${msg.role === 'user'
+                        ? 'bg-[#15213b]/90 border border-blue-400/25 text-slate-100 rounded-tr-sm'
+                        : msg.isError
+                          ? 'bg-red-500/10 border border-red-500/30 text-red-200 rounded-tl-sm'
+                          : 'bg-[#0b1224]/85 border border-white/10 text-slate-100 rounded-tl-sm'
                       }`}
                   >
-                    {/* Ask AI Logo Avatar for Assistant */}
-                    {msg.role === 'assistant' && (
-                      <div className="flex-shrink-0 w-8 h-8 rounded-xl bg-purple-600/20 border border-purple-500/20 p-1.5 flex items-center justify-center shadow-md">
-                        <img
-                          src={logoImg}
-                          alt="Ask AI"
-                          className="w-full h-full object-contain"
-                        />
-                      </div>
-                    )}
+                    {/* Header info */}
+                    <div className="flex items-center justify-between gap-4 mb-1.5 text-[11px] font-medium text-slate-400">
+                      <span>{msg.role === 'user' ? 'You' : 'Ask AI'}</span>
+                      <span className="text-[10px] text-slate-500 font-normal">
+                        {new Date(msg.timestamp).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </div>
 
-                    <div
-                      className={`max-w-[85%] md:max-w-[80%] rounded-2xl px-5 py-4 shadow-md ${
-                        msg.role === 'user'
-                          ? 'bg-[#231d3d] border border-purple-500/25 text-purple-100 rounded-tr-sm'
-                          : msg.isError
-                          ? 'bg-red-500/10 border border-red-500/30 text-red-200 rounded-tl-sm'
-                          : 'bg-[#151726]/90 border border-white/10 text-gray-100 rounded-tl-sm'
-                      }`}
-                    >
-                      {/* Markdown Formatted Message */}
-                      <div className="prose-chat text-sm md:text-base leading-relaxed break-words">
+                    {/* Message Body */}
+                    <div className="prose-chat text-sm md:text-base leading-relaxed break-words text-slate-100">
+                      {msg.isError ? (
+                        <span className="text-red-400">{msg.content}</span>
+                      ) : (
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {msg.content}
                         </ReactMarkdown>
-                      </div>
-
-                      <p className="text-[10px] text-[#80868b] mt-2 text-right">
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </p>
+                      )}
                     </div>
                   </div>
-                ))}
+                </div>
+              ))}
 
-                {/* Reasoning / Thinking Indicator */}
-                {isLoading && (
-                  <div className="flex items-center gap-2.5 text-sm text-purple-300 bg-[#151726]/80 px-4 py-2.5 rounded-2xl w-fit border border-purple-500/20 shadow-md">
-                    <Sparkles className="w-4 h-4 text-purple-400 animate-spin" />
-                    <span>Ask AI is reasoning across your documents...</span>
+              {/* Reasoning / Thinking Indicator */}
+              {isLoading && (
+                <div className="flex gap-3 justify-start w-full">
+                  <div className="flex-shrink-0 w-8 h-8 rounded-xl bg-blue-600/15 border border-blue-400/20 flex items-center justify-center text-blue-300 shadow-sm mt-0.5">
+                    <Sparkles className="w-4 h-4 animate-spin text-blue-400" />
                   </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
+                  <div className="bg-[#0b1224]/85 border border-white/10 rounded-2xl rounded-tl-sm px-5 py-3.5 text-sm text-slate-400 flex items-center gap-2 shadow-lg backdrop-blur-md">
+                    <span>Ask AI is reasoning across your documents...</span>
+                    <span className="typing-caret" />
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
             </div>
 
-            {/* Bottom Input Area - Full width with centered input pill */}
-            <div className="w-full px-4 md:px-12 lg:px-24 pb-6 pt-2 bg-gradient-to-t from-[#0d0f18] via-[#0d0f18]/90 to-transparent flex-shrink-0">
-              <div className="max-w-4xl lg:max-w-5xl mx-auto w-full">
-                <ChatInput
-                  onSend={handleSendMessage}
-                  onFileUpload={handleFileUpload}
-                  disabled={isLoading}
-                />
-              </div>
+            {/* Bottom Capsule Input */}
+            <div className="pt-2 flex-shrink-0">
+              <ChatInput
+                onSend={handleSendMessage}
+                onFileUpload={handleFileUpload}
+                disabled={isLoading}
+              />
             </div>
           </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }

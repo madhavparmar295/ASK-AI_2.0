@@ -1,45 +1,42 @@
 import { useState } from 'react';
+import { useAuth } from '../../context/AuthContext';
 import {
-  MessageSquare,
+  Clock,
   Search,
   Lightbulb,
-  Clock,
   Puzzle,
   Settings,
-  User,
+  Plus,
   LogOut,
   LogIn,
   CheckCircle,
-  Plus,
+  X,
 } from 'lucide-react';
-import logoImg from '../../assets/logo.png';
-import { useAuth } from '../../context/AuthContext';
 
-export default function Sidebar({ onOpenHistory, onNewChat }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [activeIcon, setActiveIcon] = useState('chat');
+export default function Sidebar({
+  onOpenHistory,
+  onNewChat,
+  mobileOpen = false,
+  onCloseMobile,
+}) {
+  const [activeItem, setActiveItem] = useState('new-chat');
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const { user, isAuthenticated, openAuthModal, logout } = useAuth();
 
-  const navItems = [
-    { id: 'chat', icon: MessageSquare, label: 'New Chat' },
-    { id: 'history', icon: Clock, label: 'History' },
-    { id: 'search', icon: Search, label: 'Search' },
-    { id: 'ideas', icon: Lightbulb, label: 'Ideas' },
-    { id: 'plugins', icon: Puzzle, label: 'Plugins' },
-    { id: 'settings', icon: Settings, label: 'Settings' },
-  ];
-
-  const handleNavClick = (id) => {
-    setActiveIcon(id);
+  const handleNavClick = (id, e) => {
+    e?.preventDefault();
+    setActiveItem(id);
     if (id === 'history') {
       onOpenHistory?.();
-    } else if (id === 'chat') {
+    } else if (id === 'new-chat') {
       onNewChat?.();
+    }
+    if (onCloseMobile) {
+      onCloseMobile();
     }
   };
 
-  const handleProfileClick = () => {
+  const handleAccountClick = () => {
     if (!isAuthenticated) {
       openAuthModal('login');
     } else {
@@ -47,212 +44,206 @@ export default function Sidebar({ onOpenHistory, onNewChat }) {
     }
   };
 
+  // Determine avatar letter and info
+  const avatarLetter = (
+    user?.name?.[0] ||
+    user?.email?.[0] ||
+    'P'
+  ).toUpperCase();
+  const accountName = user?.name || (isAuthenticated ? 'Parth' : 'Account');
+  const accountSub =
+    user?.email || 'parthsuryawanshi0207@gmail.com';
+
   return (
     <>
-      {/* 1. Desktop Sidebar - Matches the midnight navy and purple aura (#0d0f18 / #141624) */}
+      {/* Mobile backdrop */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 md:hidden"
+          onClick={onCloseMobile}
+        />
+      )}
+
       <aside
-        className="hidden md:flex fixed left-0 top-0 h-full bg-[#0d0f18]/85 backdrop-blur-2xl border-r border-white/5 z-30 transition-all duration-250 ease-out will-change-transform hover:w-44 w-14 flex-col group shadow-2xl"
-        style={{ contain: 'layout style paint' }}
-        onMouseEnter={() => setIsExpanded(true)}
-        onMouseLeave={() => {
-          setIsExpanded(false);
-          setIsProfileMenuOpen(false);
-        }}
+        className={`sidebar ${
+          mobileOpen ? 'mobile-open' : ''
+        }`}
       >
-        {/* Logo Header */}
-        <div className="flex items-center justify-center h-14 border-b border-white/5 transition-all duration-250 group-hover:h-16 flex-shrink-0">
-          <div className="relative w-8 h-8 flex items-center justify-center transition-all duration-250 group-hover:w-10 group-hover:h-10">
-            <img
-              src={logoImg}
-              alt="Ask AI Logo"
-              className="relative w-7 h-7 object-contain drop-shadow-[0_0_8px_rgba(168,85,247,0.35)]"
-            />
-          </div>
+        {/* Mobile close button */}
+        <div className="md:hidden flex justify-end mb-2">
+          <button
+            onClick={onCloseMobile}
+            className="p-1 rounded text-gray-400 hover:text-white"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {/* Navigation Items */}
-        <nav className="flex-1 py-3 flex flex-col gap-1 px-2 overflow-y-auto">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeIcon === item.id;
-
-            return (
-              <button
-                key={item.id}
-                onClick={() => handleNavClick(item.id)}
-                className={`
-                  relative flex items-center gap-3 px-2.5 py-2.5 rounded-xl transition-all duration-200 text-left
-                  ${
-                    isActive
-                      ? 'bg-purple-600/15 text-purple-300 border border-purple-500/30 shadow-[0_0_15px_rgba(168,85,247,0.15)]'
-                      : 'text-gray-400 hover:text-purple-200 hover:bg-white/5 border border-transparent'
-                  }
-                `}
-                aria-label={item.label}
+        {/* STATIC LOGO (NO ANIMATION LOOPS) */}
+        <div className="brand-slot">
+          <svg
+            className="static-logo-svg"
+            viewBox="0 0 600 360"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <defs>
+              <marker
+                id="micro-arrow-static"
+                viewBox="0 0 16 16"
+                refX="11.2"
+                refY="8"
+                markerWidth="5.6"
+                markerHeight="5.6"
+                orient="auto"
               >
-                <Icon className="relative w-4 h-4 flex-shrink-0" />
+                <path d="M 2.5,3.2 L 13.5,8 L 2.5,12.8 L 4.2,8 Z" fill="#ffffff" />
+              </marker>
+            </defs>
 
-                {/* Label (fade-in on sidebar hover expansion) */}
-                <span className="relative whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-250 text-xs font-medium tracking-wide">
-                  {item.label}
-                </span>
+            {/* Static continuous ribbon track */}
+            <path
+              d="M 374,80 C 440,32 535,62 535,138 C 535,218 438,226 300,140 C 162,54 65,62 65,142 C 65,222 155,232 232,168"
+              fill="none"
+              stroke="#ffffff"
+              strokeWidth="13"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              markerEnd="url(#micro-arrow-static)"
+            />
 
-                {/* Active Indicator Pip */}
-                {isActive && (
-                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-4 bg-purple-400 rounded-r-full shadow-[0_0_8px_rgba(192,132,252,0.8)]" />
-                )}
-              </button>
-            );
-          })}
+            {/* Static bead dot */}
+            <circle cx="374" cy="80" r="11" fill="#ffffff" />
+
+            {/* Static Typography */}
+            <text
+              x="300"
+              y="325"
+              fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Arial Black', sans-serif"
+              fontWeight="900"
+              fontSize="52"
+              letterSpacing="8"
+              fill="#ffffff"
+              textAnchor="middle"
+            >
+              ASK AI
+            </text>
+          </svg>
+        </div>
+
+        {/* New Chat Trigger */}
+        <button
+          className="btn-new-chat"
+          id="btnNewChat"
+          onClick={(e) => handleNavClick('new-chat', e)}
+        >
+          <Plus className="w-4 h-4 stroke-[2.2]" />
+          New Chat
+        </button>
+
+        {/* Nav Items */}
+        <nav className="nav-links">
+          <a
+            href="#history"
+            className={`nav-item ${activeItem === 'history' ? 'active' : ''}`}
+            onClick={(e) => handleNavClick('history', e)}
+          >
+            <Clock className="w-4 h-4" />
+            History
+          </a>
+          <a
+            href="#search"
+            className={`nav-item ${activeItem === 'search' ? 'active' : ''}`}
+            onClick={(e) => handleNavClick('search', e)}
+          >
+            <Search className="w-4 h-4" />
+            Search
+          </a>
+          <a
+            href="#ideas"
+            className={`nav-item ${activeItem === 'ideas' ? 'active' : ''}`}
+            onClick={(e) => handleNavClick('ideas', e)}
+          >
+            <Lightbulb className="w-4 h-4" />
+            Ideas
+          </a>
+          <a
+            href="#plugins"
+            className={`nav-item ${activeItem === 'plugins' ? 'active' : ''}`}
+            onClick={(e) => handleNavClick('plugins', e)}
+          >
+            <Puzzle className="w-4 h-4" />
+            Plugins
+          </a>
+          <a
+            href="#settings"
+            className={`nav-item ${activeItem === 'settings' ? 'active' : ''}`}
+            onClick={(e) => handleNavClick('settings', e)}
+          >
+            <Settings className="w-4 h-4" />
+            Settings
+          </a>
         </nav>
 
-        {/* Profile Card / Login Button at Bottom */}
-        <div className="mt-auto border-t border-white/5 p-2 relative flex-shrink-0">
-          {/* Profile Menu Popover */}
-          {isAuthenticated && isProfileMenuOpen && (
-            <div className="absolute bottom-16 left-2 right-2 p-3 rounded-2xl border border-white/10 shadow-2xl bg-[#141624]/95 backdrop-blur-2xl text-gray-100 z-40 animate-fadeIn text-xs">
+        {/* User Account Badge */}
+        <div className="relative">
+          {/* Profile Dropdown */}
+          {isProfileMenuOpen && (
+            <div
+              className="absolute bottom-16 left-0 right-0 p-3 rounded-xl border border-white/10 shadow-2xl bg-[#0a1122]/95 text-gray-200 z-50 text-xs backdrop-blur-2xl"
+            >
               <div className="mb-2 pb-2 border-b border-white/10">
-                <p className="font-semibold text-white truncate">{user?.name || 'User'}</p>
-                <p className="text-gray-400 truncate text-[11px]">{user?.email}</p>
-                <div className="mt-1 flex items-center gap-1 text-[10px] text-green-400 font-medium">
-                  <CheckCircle className="w-3 h-3" />
-                  <span>Verified Account</span>
-                </div>
+                <p className="font-semibold text-white truncate">{accountName}</p>
+                <p className="text-gray-400 truncate text-[11px]">{accountSub}</p>
+                {isAuthenticated && (
+                  <div className="mt-1 flex items-center gap-1 text-[10px] text-emerald-400 font-medium">
+                    <CheckCircle className="w-3 h-3" />
+                    <span>Verified Session</span>
+                  </div>
+                )}
               </div>
-              <button
-                onClick={() => {
-                  logout();
-                  setIsProfileMenuOpen(false);
-                }}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-colors font-medium"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Log Out</span>
-              </button>
+              {isAuthenticated ? (
+                <button
+                  onClick={() => {
+                    logout();
+                    setIsProfileMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-colors font-medium text-left"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Log Out</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    openAuthModal('login');
+                    setIsProfileMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-white hover:bg-white/10 transition-colors font-medium text-left"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Sign In</span>
+                </button>
+              )}
             </div>
           )}
 
-          <button
-            onClick={handleProfileClick}
-            className="w-full flex items-center gap-2.5 px-1 py-1 rounded-xl hover:bg-white/5 transition-colors text-left"
-            title={isAuthenticated ? user?.name : 'Sign In'}
+          <div
+            className="account-badge cursor-pointer hover:border-white/20 transition-colors"
+            onClick={handleAccountClick}
+            role="button"
+            tabIndex={0}
+            title={isAuthenticated ? 'Account Profile' : 'Click to Log In'}
           >
-            {/* User Avatar with purple gradient */}
-            <div
-              className={`relative w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm ${
-                isAuthenticated
-                  ? 'bg-gradient-to-br from-purple-500 to-indigo-600 text-white'
-                  : 'bg-purple-500/15 text-purple-300 border border-purple-500/25'
-              }`}
-            >
-              {isAuthenticated ? (
-                <span className="text-xs font-semibold uppercase">
-                  {(user?.name || user?.email || 'U')[0]}
-                </span>
-              ) : (
-                <User className="w-4 h-4" />
-              )}
+            <div className="account-avatar">{avatarLetter}</div>
+            <div className="account-info">
+              <div className="account-name">{accountName}</div>
+              <div className="account-sub" title={accountSub}>
+                {accountSub}
+              </div>
             </div>
-
-            {/* User info (hidden when collapsed) */}
-            <div className="flex-1 text-left opacity-0 group-hover:opacity-100 transition-opacity duration-250 overflow-hidden">
-              <p className="text-xs font-medium text-white truncate">
-                {isAuthenticated ? user?.name || 'Account' : 'Sign In'}
-              </p>
-              <p className="text-[10px] text-gray-400 truncate">
-                {isAuthenticated ? user?.email : 'Click to log in'}
-              </p>
-            </div>
-
-            {!isAuthenticated && (
-              <LogIn className="w-3.5 h-3.5 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity duration-250 flex-shrink-0" />
-            )}
-          </button>
-        </div>
-      </aside>
-
-      {/* 2. Mobile Top Navigation Bar: pinned to top of phone screen (md:hidden) */}
-      <header className="md:hidden fixed top-0 left-0 right-0 h-14 bg-[#0d0f18]/95 backdrop-blur-xl border-b border-white/5 flex items-center justify-between px-3 z-40">
-        {/* Brand & Logo */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onNewChat?.()}
-            className="flex items-center gap-2 p-1 rounded-lg active:scale-95 transition-transform"
-          >
-            <img src={logoImg} alt="Ask AI" className="w-7 h-7 object-contain drop-shadow-[0_0_6px_rgba(168,85,247,0.4)]" />
-            <span className="text-sm font-semibold text-white tracking-wide">Ask AI</span>
-          </button>
-        </div>
-
-        {/* Mobile Action Controls */}
-        <div className="flex items-center gap-1.5">
-          {/* New Chat Button */}
-          <button
-            onClick={() => onNewChat?.()}
-            className="p-1.5 rounded-lg text-purple-300 hover:text-white bg-purple-600/15 border border-purple-500/30 flex items-center gap-1 active:scale-95 transition-all text-xs"
-            title="Start New Chat"
-          >
-            <Plus className="w-4 h-4 text-purple-400" />
-            <span className="text-[11px] font-medium hidden xs:inline">New</span>
-          </button>
-
-          {/* History Drawer Trigger */}
-          <button
-            onClick={() => onOpenHistory?.()}
-            className="p-1.5 rounded-lg text-gray-300 hover:text-white bg-white/5 border border-white/10 active:scale-95 transition-all"
-            title="Chat History"
-          >
-            <Clock className="w-4 h-4 text-purple-400" />
-          </button>
-
-          {/* User Profile / Login */}
-          <div className="relative">
-            <button
-              onClick={handleProfileClick}
-              className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 text-white flex items-center justify-center active:scale-95 transition-all shadow-sm"
-              title={isAuthenticated ? user?.name : 'Sign In'}
-            >
-              {isAuthenticated ? (
-                <span className="text-[11px] font-semibold uppercase">
-                  {(user?.name || user?.email || 'U')[0]}
-                </span>
-              ) : (
-                <User className="w-3.5 h-3.5 text-white" />
-              )}
-            </button>
-
-            {/* Mobile Profile Dropdown Popover */}
-            {isAuthenticated && isProfileMenuOpen && (
-              <>
-                <div
-                  className="fixed inset-0 z-40 bg-black/20"
-                  onClick={() => setIsProfileMenuOpen(false)}
-                />
-                <div className="absolute top-9 right-0 w-60 p-3 rounded-2xl border border-white/10 shadow-2xl bg-[#141624]/95 backdrop-blur-2xl text-gray-100 z-50 animate-fadeIn text-xs">
-                  <div className="mb-2 pb-2 border-b border-white/10">
-                    <p className="font-semibold text-white truncate">{user?.name || 'User'}</p>
-                    <p className="text-gray-400 truncate text-[11px]">{user?.email}</p>
-                    <div className="mt-1 flex items-center gap-1 text-[10px] text-green-400 font-medium">
-                      <CheckCircle className="w-3 h-3" />
-                      <span>Verified Account</span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => {
-                      logout();
-                      setIsProfileMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-colors font-medium"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                    <span>Log Out</span>
-                  </button>
-                </div>
-              </>
-            )}
           </div>
         </div>
-      </header>
+      </aside>
     </>
   );
 }

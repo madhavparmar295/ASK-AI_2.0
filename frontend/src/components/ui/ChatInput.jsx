@@ -1,24 +1,63 @@
-import { useState, useRef } from 'react';
-import { Paperclip, Mic, Send } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
 
-export default function ChatInput({ onSend, onFileUpload, disabled = false }) {
-  const [message, setMessage] = useState('');
+export default function ChatInput({ onSend, onFileUpload, disabled = false, inputValue = '', setInputValue }) {
+  const [localInput, setLocalInput] = useState('');
   const [isListening, setIsListening] = useState(false);
   const fileInputRef = useRef(null);
+  const recognitionRef = useRef(null);
+
+  // Sync external controlled state if provided
+  const currentText = setInputValue ? inputValue : localInput;
+  const updateText = setInputValue ? setInputValue : setLocalInput;
+
+  // Initialize Web Speech API if supported
+  useEffect(() => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        updateText((prev) => (prev ? `${prev} ${transcript}` : transcript));
+        setIsListening(false);
+      };
+
+      recognition.onerror = () => {
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognitionRef.current = recognition;
+    }
+  }, [updateText]);
 
   const handleSubmit = (e) => {
-    e.preventDefault();
-    if (message.trim() && !disabled) {
-      onSend?.(message);
-      setMessage('');
+    e?.preventDefault();
+    if (currentText.trim() && !disabled) {
+      onSend?.(currentText.trim());
+      updateText('');
     }
   };
 
-  const handleAttachment = () => {
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  const handleAttachClick = () => {
     fileInputRef.current?.click();
   };
 
-  const handleFileChange = (e) => {
+  const handleFileSelected = (e) => {
     const file = e.target.files?.[0];
     if (file) {
       onFileUpload?.(file);
@@ -26,76 +65,106 @@ export default function ChatInput({ onSend, onFileUpload, disabled = false }) {
     }
   };
 
-  const handleVoiceInput = () => {
-    setIsListening(!isListening);
+  const toggleVoice = () => {
+    if (!recognitionRef.current) {
+      alert('Voice dictation is not supported by your current browser.');
+      return;
+    }
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      try {
+        recognitionRef.current.start();
+        setIsListening(true);
+      } catch (err) {
+        console.error('Speech recognition error:', err);
+      }
+    }
   };
 
   return (
-    <div className="w-full max-w-3xl mx-auto px-2 md:px-4">
+    <div className="input-section">
       {/* Hidden file input */}
       <input
         type="file"
         ref={fileInputRef}
-        onChange={handleFileChange}
+        onChange={handleFileSelected}
         className="hidden"
-        accept=".pdf,.docx,.doc,.txt,.csv,.xlsx,.xls"
+        accept=".pdf,.docx,.doc,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg"
       />
 
-      <form onSubmit={handleSubmit} className="relative">
-        {/* Floating Gemini-style Input Pill */}
-        <div className="rounded-2xl p-2.5 md:p-3 flex items-center gap-2.5 bg-[#141726]/90 backdrop-blur-xl border border-white/10 shadow-2xl focus-within:border-purple-500/40 focus-within:shadow-[0_0_30px_rgba(139,92,246,0.15)] transition-all">
-          {/* Attachment button */}
+      <form onSubmit={handleSubmit} className="w-full">
+        <div className="capsule-box">
+          {/* Attach Button */}
           <button
             type="button"
-            onClick={handleAttachment}
+            className="icon-btn"
+            title="Attach file"
+            onClick={handleAttachClick}
             disabled={disabled}
-            className="flex-shrink-0 w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-50 flex items-center justify-center transition-colors text-gray-400 hover:text-white"
-            title="Attach document (.pdf, .docx, .txt, etc.)"
-            aria-label="Attach file"
           >
-            <Paperclip className="w-4 h-4" />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
           </button>
 
-          {/* Text input */}
+          {/* Text Input */}
           <input
             type="text"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder={disabled ? "Thinking..." : "Ask questions about your emails, documents, or data..."}
+            className="main-input"
+            id="mainInput"
+            value={currentText}
+            onChange={(e) => updateText(e.target.value)}
+            onKeyDown={handleKeyDown}
             disabled={disabled}
-            className="flex-1 bg-transparent text-sm md:text-base text-white placeholder-gray-500 outline-none disabled:opacity-50"
+            placeholder={
+              disabled
+                ? 'Synthesizing response...'
+                : 'Ask questions about your emails, documents, or data...'
+            }
           />
 
-          {/* Mic button */}
+          {/* Voice Dictation Button */}
           <button
             type="button"
-            onClick={handleVoiceInput}
+            className={`icon-btn ${isListening ? 'text-red-400' : ''}`}
+            title={isListening ? 'Listening...' : 'Voice dictation'}
+            onClick={toggleVoice}
             disabled={disabled}
-            className={`flex-shrink-0 w-8 h-8 rounded-xl flex items-center justify-center transition-all ${isListening
-                ? 'bg-red-500/20 text-red-400 pulse-glow'
-                : 'bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white'
-              } disabled:opacity-50`}
-            aria-label="Voice input"
+            style={isListening ? { color: '#ff4d4f' } : undefined}
           >
-            <Mic className="w-4 h-4" />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
           </button>
 
-          {/* Send button */}
+          {/* Send Button */}
           <button
             type="submit"
-            disabled={!message.trim() || disabled}
-            className="flex-shrink-0 w-8 h-8 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-900/30 disabled:to-indigo-900/30 disabled:cursor-not-allowed flex items-center justify-center transition-all hover:scale-105 active:scale-95 shadow-md shadow-purple-600/20"
-            aria-label="Send message"
+            className="btn-send"
+            id="btnSend"
+            title="Send query"
+            disabled={!currentText.trim() || disabled}
+            style={{
+              opacity: !currentText.trim() || disabled ? 0.6 : 1,
+              cursor: !currentText.trim() || disabled ? 'not-allowed' : 'pointer',
+            }}
           >
-            <Send className="w-3.5 h-3.5 text-white" />
+            <svg viewBox="0 0 24 24">
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
           </button>
         </div>
       </form>
 
-      {/* Footer disclaimer */}
-      <p className="text-center text-[11px] text-gray-500 mt-2.5">
+      <div className="disclaimer-text">
         Ask AI answers questions based on your indexed emails and uploaded files.
-      </p>
+      </div>
     </div>
   );
 }

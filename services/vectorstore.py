@@ -1,4 +1,5 @@
 import os
+import unicodedata
 
 from dotenv import load_dotenv
 from pinecone import Pinecone, ServerlessSpec
@@ -13,6 +14,29 @@ INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "ask-ai")
 pc = Pinecone(api_key=_PINECONE_API_KEY)
 
 _index = None
+
+
+def _to_ascii_id(raw_id: str) -> str:
+    """Ensure Pinecone vector ID contains only ASCII characters."""
+    # Replace common unicode quotes and dashes with ASCII equivalents
+    cleaned = (
+        raw_id.replace("’", "'")
+        .replace("‘", "'")
+        .replace("“", '"')
+        .replace("”", '"')
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+    # Normalize and strip any other non-ASCII characters
+    ascii_id = (
+        unicodedata.normalize("NFKD", cleaned)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+    if not ascii_id.strip("-"):
+        import hashlib
+        return hashlib.md5(raw_id.encode("utf-8", "ignore")).hexdigest()
+    return ascii_id
 
 
 def get_index():
@@ -53,9 +77,10 @@ def upsert_chunks(chunks: list[dict], embeddings: list[list[float]]) -> None:
         if chunk.get("uploaded_at"):
             metadata["uploaded_at"] = chunk["uploaded_at"]
 
+        vector_id = _to_ascii_id(f"{chunk['doc_id']}-{i}")
         vectors.append(
             {
-                "id": f"{chunk['doc_id']}-{i}",
+                "id": vector_id,
                 "values": embedding,
                 "metadata": metadata,
             }
